@@ -65,6 +65,15 @@ a {
   -webkit-backdrop-filter: blur(24px);
 }
 
+/* backdrop-filter is very expensive on 4K; use an opaque header instead. */
+@media (min-width: 2000px), (min-resolution: 2dppx) {
+  .site-header {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(8, 8, 8, 0.94);
+  }
+}
+
 .header-inner {
   display: flex;
   align-items: center;
@@ -177,6 +186,8 @@ a {
   position: absolute;
   width: 100%;
   z-index: 0;
+  contain: paint;
+  transform: translateZ(0);
 }
 
 .hero-title-block .eyebrow,
@@ -233,6 +244,8 @@ a {
 .topic-section {
   border-bottom: 1px solid var(--border);
   padding: 4.5rem 0;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 720px;
 }
 
 .topic-section h2 {

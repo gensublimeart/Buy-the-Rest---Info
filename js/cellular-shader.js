@@ -1,6 +1,30 @@
 const shaderParkUrl =
   "https://unpkg.com/shader-park-core/dist/shader-park-core.esm.js";
 
+function detectShaderDefaults() {
+  const screenW = window.screen.width;
+  const screenH = window.screen.height;
+  const dpr = window.devicePixelRatio || 1;
+  const screenPixels = screenW * screenH;
+
+  // 4K and other large / high-DPI displays: lower internal resolution and cap FPS.
+  if (screenPixels >= 3840 * 2160 || screenW >= 2560) {
+    return { maxDpr: 1, renderScale: 0.32, maxPixelWidth: 768, maxPixelHeight: 432, targetFps: 30 };
+  }
+  if (screenPixels >= 2560 * 1440 || dpr >= 2) {
+    return { maxDpr: 1, renderScale: 0.38, maxPixelWidth: 896, maxPixelHeight: 504, targetFps: 30 };
+  }
+  return { maxDpr: 1, renderScale: 0.45, maxPixelWidth: 1024, maxPixelHeight: 576, targetFps: 60 };
+}
+
+function getShaderConfig() {
+  return { ...detectShaderDefaults(), ...(window.BTR_SHADER_CONFIG || {}) };
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 let activeCleanup = null;
 let activeResize = null;
 let resizeTimer = null;
@@ -17,7 +41,15 @@ function cleanupActiveRenderer() {
 function createContainerRenderer(canvas, container, fragmentSource, vertexSource) {
   let frameId = 0;
   let disposed = false;
-  const gl = canvas.getContext("webgl2");
+  let isVisible = true;
+  let isDocumentVisible = !document.hidden;
+  let lastDrawTime = 0;
+  const gl = canvas.getContext("webgl2", {
+    alpha: true,
+    antialias: false,
+    depth: false,
+    powerPreference: "high-performance",
+  });
   if (!gl) throw new Error("WebGL2 not available");
 
   const vertices = [-1.0, -1.0, 0.0, 3.0, -1.0, 0.0, -1.0, 3.0, 0.0];
@@ -60,7 +92,6 @@ function createContainerRenderer(canvas, container, fragmentSource, vertexSource
   gl.vertexAttribPointer(coord, 3, gl.FLOAT, false, 0, 0);
   gl.enableVertexAttribArray(coord);
   gl.clearColor(1.0, 1.0, 1.0, 0.9);
-  gl.enable(gl.DEPTH_TEST);
 
   const startTime = Date.now();
   const timeLoc = gl.getUniformLocation(program, "time");
@@ -70,17 +101,29 @@ function createContainerRenderer(canvas, container, fragmentSource, vertexSource
   gl.uniform1f(opacityLoc, 1.0);
   gl.uniform1f(scaleLoc, 1.0);
 
+  let renderWidth = 1;
+  let renderHeight = 1;
+
   function resizeCanvas() {
+    const { maxDpr, renderScale, maxPixelWidth, maxPixelHeight } = getShaderConfig();
     const rect = container.getBoundingClientRect();
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const width = Math.max(1, Math.floor(rect.width * dpr));
-    const height = Math.max(1, Math.floor(rect.height * dpr));
+    const dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
+    let width = Math.max(1, Math.floor(rect.width * dpr * renderScale));
+    let height = Math.max(1, Math.floor(rect.height * dpr * renderScale));
+
+    if (width > maxPixelWidth || height > maxPixelHeight) {
+      const fitScale = Math.min(maxPixelWidth / width, maxPixelHeight / height);
+      width = Math.max(1, Math.floor(width * fitScale));
+      height = Math.max(1, Math.floor(height * fitScale));
+    }
 
     if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width;
       canvas.height = height;
     }
 
+    renderWidth = width;
+    renderHeight = height;
     return { width, height };
   }
 
@@ -89,17 +132,50 @@ function createContainerRenderer(canvas, container, fragmentSource, vertexSource
     resizeCanvas();
   }
 
-  function draw() {
+  function draw(timestamp) {
     if (disposed) return;
+    frameId = window.requestAnimationFrame(draw);
 
-    const { width, height } = resizeCanvas();
+    if (!isVisible || !isDocumentVisible || prefersReducedMotion()) return;
+
+    const { targetFps = 60 } = getShaderConfig();
+    const frameInterval = 1000 / targetFps;
+    if (timestamp - lastDrawTime < frameInterval) return;
+    lastDrawTime = timestamp;
+
     gl.uniform1f(timeLoc, (Date.now() - startTime) * 0.001);
-    gl.uniform2fv(resolutionLoc, [width, height]);
+    gl.uniform2fv(resolutionLoc, [renderWidth, renderHeight]);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0);
-    frameId = window.requestAnimationFrame(draw);
   }
+
+  function setVisible(nextVisible) {
+    isVisible = nextVisible;
+    if (isVisible && isDocumentVisible && !prefersReducedMotion()) {
+      lastDrawTime = 0;
+    }
+  }
+
+  function setDocumentVisible(nextVisible) {
+    isDocumentVisible = nextVisible;
+    if (isDocumentVisible && isVisible && !prefersReducedMotion()) {
+      lastDrawTime = 0;
+    }
+  }
+
+  const visibilityObserver = new IntersectionObserver(
+    (entries) => {
+      setVisible(entries.some((entry) => entry.isIntersecting));
+    },
+    { root: null, threshold: 0 }
+  );
+  visibilityObserver.observe(container);
+
+  const onDocumentVisibility = () => {
+    setDocumentVisible(!document.hidden);
+  };
+  document.addEventListener("visibilitychange", onDocumentVisibility);
 
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(container);
@@ -112,6 +188,8 @@ function createContainerRenderer(canvas, container, fragmentSource, vertexSource
       disposed = true;
       window.cancelAnimationFrame(frameId);
       window.removeEventListener("resize", resize);
+      document.removeEventListener("visibilitychange", onDocumentVisibility);
+      visibilityObserver.disconnect();
       resizeObserver.disconnect();
       gl.getExtension("WEBGL_lose_context")?.loseContext();
     },
@@ -122,9 +200,9 @@ function createContainerRenderer(canvas, container, fragmentSource, vertexSource
 async function initShaderPark(canvas, container) {
   const { sculptToFullGLSLSource, minimalVertexSource } = await import(shaderParkUrl);
   const shader = `
-    setMaxIterations(4);
-    setStepSize(0.5);
-    setGeometryQuality(0.1);
+    setMaxIterations(3);
+    setStepSize(0.55);
+    setGeometryQuality(0.08);
 
     let t = time * 0.01;
 
@@ -152,8 +230,8 @@ async function initShaderPark(canvas, container) {
     let wobble = noise(flatSpace * 1.3 + vec3(0, t * 0.6, 0)) * 0.025;
     let breath = sin(time * 0.7) * 0.012;
 
-    let ciliaWave = noise(flatSpace * 35.0 + vec3(0, t * 6.0, 0)) * 0.012;
-    let ciliaWave2 = noise(flatSpace * 50.0 + vec3(t * 4.0, 0, 0)) * 0.008;
+    let ciliaWave = noise(flatSpace * 24.0 + vec3(0, t * 6.0, 0)) * 0.012;
+    let ciliaWave2 = noise(flatSpace * 32.0 + vec3(t * 4.0, 0, 0)) * 0.008;
     let cilia = ciliaWave + ciliaWave2;
 
     let grain = fractalNoise(flatSpace * 2.5 + vec3(t * 0.15, 0, 0));
@@ -212,6 +290,7 @@ function scheduleResize() {
 }
 
 window.addEventListener("btr:render", initCellularMotion);
+window.addEventListener("btr:resize", scheduleResize);
 window.addEventListener("resize", scheduleResize);
 window.addEventListener("orientationchange", scheduleResize);
 initCellularMotion();

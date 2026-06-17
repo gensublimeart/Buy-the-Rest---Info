@@ -141,6 +141,16 @@
     document.title = t(content.meta.title);
 
     const app = document.getElementById("app");
+    const existingCanvas = document.getElementById("cellular-canvas");
+    const preserveCanvas = Boolean(existingCanvas);
+    if (existingCanvas) {
+      existingCanvas.remove();
+    }
+
+    const heroCanvasMarkup = preserveCanvas
+      ? ""
+      : '<canvas id="cellular-canvas" class="hero-shader" aria-hidden="true"></canvas>';
+
     app.innerHTML = `
       <header class="site-header">
         <div class="header-inner">
@@ -157,7 +167,7 @@
 
       <main id="top">
         <section class="hero">
-          <canvas id="cellular-canvas" class="hero-shader" aria-hidden="true"></canvas>
+          ${heroCanvasMarkup}
           <div class="hero-inner">
             <div class="hero-title-block">
               <p class="eyebrow">${t(content.hero.eyebrow)}</p>
@@ -177,6 +187,14 @@
       </footer>
     `;
 
+    const hero = document.querySelector(".hero");
+    if (existingCanvas && hero) {
+      hero.insertBefore(existingCanvas, hero.firstChild);
+      window.dispatchEvent(new CustomEvent("btr:resize"));
+    } else {
+      window.dispatchEvent(new CustomEvent("btr:render"));
+    }
+
     document.querySelectorAll(".lang-btn").forEach((button) => {
       button.addEventListener("click", (e) => {
         setLang(e.currentTarget.dataset.lang);
@@ -195,7 +213,6 @@
       { threshold: 0.1 }
     );
     document.querySelectorAll(".fade-in").forEach((el) => observer.observe(el));
-    window.dispatchEvent(new CustomEvent("btr:render"));
   }
 
   render();

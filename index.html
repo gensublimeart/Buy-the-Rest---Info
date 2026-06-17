@@ -21,13 +21,8 @@
     <script src="js/content.js"></script>
     <script src="js/main.js"></script>
     <script>
-      // Lower internal render resolution; canvas is upscaled via CSS for 4K performance.
-      window.BTR_SHADER_CONFIG = {
-        maxDpr: 1,
-        renderScale: 0.4,
-        maxPixelWidth: 960,
-        maxPixelHeight: 540,
-      };
+      // Optional overrides; defaults auto-detect screen size in cellular-shader.js.
+      // window.BTR_SHADER_CONFIG = { targetFps: 30, maxPixelWidth: 768 };
     </script>
     <script src="js/cellular-shader.js"></script>
   </body>
